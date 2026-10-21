@@ -1,0 +1,60 @@
+{
+  "core": {
+    "name": "Djamel-Fca Architecte",
+    "version": "1.0.0",
+    "author": "DJAMEL",
+    "library": "Djamel-fca",
+    "attribution": "Core By Djamel"
+  },
+  "botName": "My Bot",
+  "botVersion": "1.0.0",
+  "prefix": "/",
+  "language": "ar",
+  "timezone": "Africa/Algiers",
+  "ownerID": "",
+  "adminBot": [],
+  "superAdminBot": [],
+  "adminOnly": {
+    "enable": false
+  },
+  "facebookAccount": {
+    "userAgent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36",
+    "intervalGetNewCookie": 1440
+  },
+  "dashboard": {
+    "port": 8080,
+    "password": "CHANGE_ME"
+  },
+  "mqttHealthCheck": {
+    "enable": true,
+    "silentTimeoutMinutes": 10,
+    "checkIntervalMinMinutes": 2,
+    "checkIntervalMaxMinutes": 5,
+    "maxRestarts": 5
+  },
+  "keepAlive": {
+    "enable": true,
+    "pingIntervalMinMinutes": 8,
+    "pingIntervalMaxMinutes": 15
+  },
+  "rateLimit": {
+    "maxMessagesPerWindow": 8,
+    "windowMs": 6000
+  },
+  "pollIntervalMs": 6000,
+  "outgoingThrottle": {
+    "enable": true,
+    "minIntervalMs": 350,
+    "maxQueuePerThread": 12
+  },
+  "sessionMonitor": {
+    "enable": true,
+    "intervalSeconds": 300
+  },
+  "media": {
+    "maxUploadMB": 25,
+    "tiktokApiUrl": "https://www.tikwm.com/api/",
+    "maxVideoHeight": 720,
+    "audioQuality": "128K"
+  }
+}

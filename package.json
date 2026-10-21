@@ -1,0 +1,52 @@
+{
+  "name": "djamel-fca-architecte",
+  "version": "2.0.0",
+  "description": "Reusable Djamel-Fca bot foundation: Facebook runtime, MQTT/listener fallback, sessions, protections, dashboard, database and media adapters.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node core-runtime-source.js",
+    "test": "node --test",
+    "postinstall": "node scripts/fix-esm.js",
+    "lint": "node --check core-runtime-source.js"
+  },
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@distube/ytdl-core": "^4.16.12",
+    "@dongdev/fca-unofficial": "^4.0.3",
+    "axios": "^1.19.0",
+    "body-parser": "^1.20.6",
+    "chalk": "^4.1.2",
+    "express": "^4.22.2",
+    "fs-extra": "^11.4.0",
+    "gradient-string": "^2.0.2",
+    "moment-timezone": "^0.5.48",
+    "socket.io": "^4.8.3",
+    "tough-cookie": "^5.1.2",
+    "yt-search": "^2.13.1",
+    "ffmpeg-static": "^5.3.0",
+    "sharp": "^0.34.4",
+    "gif-encoder": "^0.7.2",
+    "youtube-dl-exec": "^3.1.15",
+    "spotify-url-info": "^3.3.3"
+  },
+  "overrides": {
+    "tar": "^7.4.3"
+  },
+  "author": "DJAMEL",
+  "license": "UNLICENSED",
+  "keywords": [
+    "facebook",
+    "messenger",
+    "bot",
+    "DJAMEL",
+    "facebook",
+    "messenger",
+    "bot",
+    "djamel-fca",
+    "architecte"
+  ]
+}
