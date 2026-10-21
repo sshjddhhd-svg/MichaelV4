@@ -1,0 +1,1 @@
+(async()=>{const status=document.querySelector('[data-status]');if(!status)return;try{const r=await fetch('/health');const d=await r.json();status.textContent=d.ok?'Online':'Unavailable';}catch{status.textContent='Unavailable';}})();
