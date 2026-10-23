@@ -1,92 +1,43 @@
 /**
- * أمر انسخ: يفحص أحدث رسالة في المجموعة كل 10 ثوانٍ.
- * إذا كانت أحدث رسالة من عضو وليست من البوت، يرسل الرد مرة واحدة لذلك التحديث.
- * لا ينتظر 10 ثوانٍ إضافية بعد الفحص، ولا يكرر الرد إذا تأخر ظهور رسالة البوت في السجل.
+ * أمر انسخ: يرسل نص الرد تلقائياً كل 20–35 ثانية، على غرار MichaelVbita.
+ * أمر توقف يلغي المؤقت الخاص بالمحادثة الحالية.
  */
 "use strict";
 
-const TEXT = require("../utils/copyMessage");
-const CHECK_MS = 10_000;
-const HISTORY_LIMIT = 20;
+const AUTO_MSG = require("../utils/copyMessage");
+const MIN_DELAY_MS = 20_000;
+const MAX_DELAY_MS = 35_000;
+const MIN_TYPING_MS = 2_000;
+const MAX_TYPING_MS = 5_000;
 
-global._copyWatchers = global._copyWatchers || new Map();
+global._dracarysAutoJobs = global._dracarysAutoJobs || new Map();
 
-function invokeHistory(api, threadID, limit) {
-  return new Promise(resolve => {
-    let settled = false;
-    const done = (err, value) => {
-      if (settled) return;
-      settled = true;
-      resolve(err ? null : value);
-    };
-    try {
-      if (typeof api.getThreadHistory !== "function") {
-        return done(new Error("getThreadHistory is unavailable"));
-      }
-      const returned = api.getThreadHistory(threadID, limit, null, done);
-      if (returned && typeof returned.then === "function") {
-        returned.then(value => done(null, value), done);
-      }
-    } catch (err) {
-      done(err);
-    }
-  });
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function normalizeMessages(raw) {
-  if (Array.isArray(raw)) return raw;
-  if (raw && Array.isArray(raw.messages)) return raw.messages;
-  if (raw && Array.isArray(raw.threadMessages)) return raw.threadMessages;
-  if (raw && Array.isArray(raw.data)) return raw.data;
-  return [];
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function timestampOf(msg) {
-  const raw = msg?.timestampMs ?? msg?.timestamp ?? msg?.createdAt ?? msg?.created_at;
-  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-  if (typeof raw === "string") {
-    const numeric = Number(raw);
-    if (Number.isFinite(numeric) && numeric > 0) return numeric;
-    const parsed = Date.parse(raw);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return 0;
+function isActive(threadID, state) {
+  return global._dracarysAutoJobs?.get(threadID) === state && !state.stopped;
 }
 
-function messageKey(msg) {
-  if (!msg || typeof msg !== "object") return null;
-  const id = msg.messageID ?? msg.messageId ?? msg.message_id ?? msg.id;
-  if (id !== undefined && id !== null && String(id)) return String(id);
-  const sender = msg.senderID ?? msg.senderId ?? msg.author ?? msg.userID ?? msg.userId;
-  const time = timestampOf(msg);
-  const body = msg.body ?? msg.text ?? msg.message ?? "";
-  if (sender != null && (time || body)) return `${sender}:${time}:${String(body)}`;
-  return null;
+function stopWatch(threadID) {
+  const tid = String(threadID || "").trim();
+  const jobs = global._dracarysAutoJobs;
+  const state = jobs?.get(tid);
+  if (!state) return false;
+
+  state.stopped = true;
+  if (state.timer) clearTimeout(state.timer);
+  if (state.typingTimer) clearTimeout(state.typingTimer);
+  jobs.delete(tid);
+  return true;
 }
 
-function senderOf(msg) {
-  const value = msg?.senderID ?? msg?.senderId ?? msg?.author ?? msg?.userID ?? msg?.userId;
-  return value == null ? "" : String(value);
-}
-
-function newestMessage(raw) {
-  const messages = normalizeMessages(raw).filter(msg => msg && typeof msg === "object");
-  if (!messages.length) return null;
-  const timed = messages.map((msg, index) => ({ msg, index, time: timestampOf(msg) }));
-  if (timed.some(item => item.time > 0)) {
-    timed.sort((a, b) => b.time - a.time || b.index - a.index);
-    return timed[0].msg;
-  }
-  // When the API provides no timestamps, FCA's history is commonly newest-first.
-  return messages[0];
-}
-
-async function getLatest(api, threadID) {
-  const raw = await invokeHistory(api, threadID, HISTORY_LIMIT);
-  return newestMessage(raw);
-}
-
-function sendPlain(api, threadID, text) {
+function sendMessage(api, threadID, text) {
   return new Promise((resolve, reject) => {
     let settled = false;
     const done = (err, result) => {
@@ -95,138 +46,60 @@ function sendPlain(api, threadID, text) {
       if (err) reject(err);
       else resolve(result);
     };
-    let timeout;
+
+    let timer;
     try {
-      timeout = setTimeout(() => done(new Error("COPY_SEND_TIMEOUT: no callback within 25 seconds")), 25_000);
+      timer = setTimeout(() => done(new Error("AUTO_COPY_SEND_TIMEOUT")), 25_000);
       const returned = api.sendMessage(text, threadID, (err, result) => {
-        if (timeout) clearTimeout(timeout);
+        clearTimeout(timer);
         done(err, result);
       });
       if (returned && typeof returned.then === "function") {
-        returned.then(result => {
-          if (timeout) clearTimeout(timeout);
-          done(null, result);
-        }, err => {
-          if (timeout) clearTimeout(timeout);
-          done(err);
-        });
+        returned.then(
+          result => { clearTimeout(timer); done(null, result); },
+          err => { clearTimeout(timer); done(err); }
+        );
       }
     } catch (err) {
-      if (timeout) clearTimeout(timeout);
+      if (timer) clearTimeout(timer);
       done(err);
     }
   });
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+async function scheduleNext(api, threadID, state) {
+  if (!isActive(threadID, state)) return;
+  state.timer = setTimeout(async () => {
+    if (!isActive(threadID, state)) return;
 
-async function startWatch(api, threadID) {
-  const tid = String(threadID || "").trim();
-  if (!tid) throw new Error("معرّف المجموعة فارغ");
-  if (global._copyWatchers.has(tid)) return false;
-
-  const botValue = global.GoatBot?.botID || api.getCurrentUserID?.();
-  const botID = botValue == null ? "" : String(botValue);
-  if (!botID) throw new Error("تعذر تحديد معرّف حساب البوت؛ لم تبدأ المراقبة لتجنب الردود الخاطئة");
-
-  const state = {
-    busy: false,
-    lastObservedKey: null,
-    lastRepliedToKey: null,
-    timer: null,
-    stopped: false,
-    startedAt: Date.now(),
-    lastErrorLogAt: 0,
-    api,
-    threadID: tid,
-    botID
-  };
-  global._copyWatchers.set(tid, state);
-
-  try {
-    const initial = await getLatest(api, tid);
-    state.lastObservedKey = messageKey(initial);
-    // Do not reply to messages that existed before monitoring started.
-  } catch (err) {
-    global.log?.warn?.("COPY", `تعذر أخذ خط الأساس للمجموعة ${tid}: ${err?.message || err}`);
-  }
-
-  const tick = async () => {
-    if (state.stopped || global._copyWatchers.get(tid) !== state || state.busy) return;
-    state.busy = true;
     try {
-      const latest = await getLatest(api, tid);
-      const key = messageKey(latest);
-      const senderID = senderOf(latest);
-
-      if (!latest || !key || !senderID) {
-        const now = Date.now();
-        if (now - state.lastErrorLogAt >= 30_000) {
-          state.lastErrorLogAt = now;
-          global.log?.warn?.("COPY", `تعذر تحديد أحدث رسالة في المجموعة ${tid}; تحقق من getThreadHistory`);
-        }
-        return;
+      if (typeof api.sendTypingIndicator === "function") {
+        try {
+          api.sendTypingIndicator(threadID);
+        } catch (_) {}
       }
 
-      state.lastObservedKey = key;
-      // If our message is latest, the desired condition is already satisfied.
-      if (senderID === botID) return;
-      // Ignore the same human message if our outgoing message has not appeared
-      // in history yet, or if the API returns stale history temporarily.
-      if (state.lastRepliedToKey === key) return;
+      await sleep(randomInt(MIN_TYPING_MS, MAX_TYPING_MS));
+      if (!isActive(threadID, state)) return;
 
-      // Mark before sending so a slow callback or a later tick cannot duplicate it.
-      state.lastRepliedToKey = key;
-      try {
-        await sendPlain(api, tid, TEXT);
-        global.log?.info?.("COPY", `تم إرسال الرد للمجموعة ${tid} بعد أحدث رسالة ${key}`);
-      } catch (err) {
-        // Allow the next poll to retry if the send failed.
-        if (state.lastRepliedToKey === key) state.lastRepliedToKey = null;
-        throw err;
-      }
+      await sendMessage(api, threadID, AUTO_MSG);
     } catch (err) {
-      const now = Date.now();
-      if (now - state.lastErrorLogAt >= 30_000) {
-        state.lastErrorLogAt = now;
-        global.log?.error?.("COPY", `مشكلة مراقبة ${tid}: ${err?.message || err}`);
-      }
+      global.log?.warn?.("COPY", `تعذر إرسال الرسالة التلقائية في ${threadID}: ${err?.message || err}`);
     } finally {
-      state.busy = false;
+      if (isActive(threadID, state)) scheduleNext(api, threadID, state);
     }
-  };
-
-  const scheduleNext = async () => {
-    await tick();
-    if (!state.stopped && global._copyWatchers.get(tid) === state) {
-      state.timer = setTimeout(scheduleNext, CHECK_MS);
-    }
-  };
-
-  // First check after 10 seconds, then one serialized check every 10 seconds.
-  state.timer = setTimeout(scheduleNext, CHECK_MS);
-  return true;
+  }, randomInt(MIN_DELAY_MS, MAX_DELAY_MS));
 }
 
-function stopWatch(threadID) {
+function startWatch(api, threadID) {
   const tid = String(threadID || "").trim();
-  const state = global._copyWatchers.get(tid);
-  if (!state) return false;
-  state.stopped = true;
-  if (state.timer) clearTimeout(state.timer);
-  global._copyWatchers.delete(tid);
-  return true;
-}
+  if (!tid) throw new Error("معرّف المحادثة فارغ");
+  if (global._dracarysAutoJobs.has(tid)) return false;
 
-function resolveTarget(args, currentThreadID) {
-  const first = String(args?.[0] || "").trim().toLowerCase();
-  const actions = ["start", "stop", "status", "تشغيل", "إيقاف", "حالة"];
-  const action = actions.includes(first) ? first : "start";
-  const hasAction = actions.includes(first);
-  const targetArg = hasAction ? args?.[1] : args?.[0];
-  return { action, threadID: String(targetArg || currentThreadID || "").trim() };
+  const state = { timer: null, typingTimer: null, stopped: false };
+  global._dracarysAutoJobs.set(tid, state);
+  scheduleNext(api, tid, state);
+  return true;
 }
 
 module.exports = {
@@ -235,37 +108,35 @@ module.exports = {
     aliases: ["copy"],
     category: "group",
     role: 2,
-    description: "يفحص أحدث رسالة كل 10 ثوانٍ ويرد مرة واحدة إذا لم تكن من البوت"
+    description: "يرسل الرسالة تلقائياً كل 20–35 ثانية"
   },
 
   stopWatch,
 
   onStart: async ({ api, threadID, args = [], message }) => {
-    const { action, threadID: targetID } = resolveTarget(args, threadID);
-    if (!targetID) return message.reply("❌ لم أستطع تحديد المجموعة.");
+    const first = String(args[0] || "").trim().toLowerCase();
 
-    if (["stop", "إيقاف"].includes(action)) {
-      return stopWatch(targetID)
+    if (["stop", "إيقاف", "توقف"].includes(first)) {
+      return stopWatch(threadID)
         ? message.reply("تم ايقاف المراقبة بهذه المجموعة")
         : message.reply("لا توجد مراقبة نشطة بهذه المجموعة");
     }
 
-    if (["status", "حالة"].includes(action)) {
-      const state = global._copyWatchers.get(targetID);
+    if (["status", "حالة"].includes(first)) {
       return message.reply(
-        state
-          ? `✅ المراقبة نشطة للمجموعة ${targetID}. الفحص كل 10 ثوانٍ، والرد مرة واحدة عند كون أحدث رسالة من عضو.`
-          : `ℹ️ المراقبة غير نشطة للمجموعة ${targetID}.`
+        global._dracarysAutoJobs.has(String(threadID))
+          ? "الإرسال التلقائي نشط بهذه المجموعة"
+          : "الإرسال التلقائي متوقف بهذه المجموعة"
       );
     }
 
     try {
-      const started = await startWatch(api, targetID);
-      if (!started) return message.reply(`⚠️ المراقبة تعمل بالفعل للمجموعة ${targetID}.`);
+      const started = startWatch(api, threadID);
+      if (!started) return message.reply("الإرسال التلقائي يعمل بالفعل بهذه المجموعة");
       return message.reply("تم تفعيل مراقبة المجموعة");
     } catch (err) {
       global.log?.error?.("COPY", err?.message || String(err));
-      return message.reply(`❌ تعذر بدء مراقبة المجموعة: ${err?.message || err}`);
+      return message.reply("تعذر تفعيل الإرسال التلقائي بهذه المجموعة");
     }
   }
 };
