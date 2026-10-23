@@ -1,13 +1,12 @@
-
 /**
  * أمر: انسخ
- * يفحص آخر رسالة في المجموعة كل 10 ثوانٍ.
- * يرسل الرسالة المحفوظة مرة واحدة لكل رسالة جديدة يتمكن من تحديدها.
+ * يراقب آخر رسالة في مجموعة محددة كل 10 ثوانٍ ويرسل الرد المحفوظ
+ * مرة واحدة فقط عند ظهور رسالة جديدة من شخص آخر.
  */
 "use strict";
 
 const TEXT = require("../utils/copyMessage");
-const CHECK_MS = 10000;
+const CHECK_MS = 10_000;
 
 global._copyWatchers = global._copyWatchers || new Map();
 
@@ -20,16 +19,12 @@ function getLastMessage(api, threadID) {
         }
 
         const msg = history[history.length - 1];
-
-        if (!msg || !msg.senderID) {
-          return resolve(null);
-        }
+        if (!msg || !msg.senderID) return resolve(null);
 
         const senderID = String(msg.senderID);
         const messageID = msg.messageID || msg.messageId || msg.id;
         const timestamp = msg.timestamp || msg.createdAt || "";
         const body = msg.body || msg.text || "";
-
         const key = messageID
           ? String(messageID)
           : timestamp || body
@@ -38,7 +33,7 @@ function getLastMessage(api, threadID) {
 
         resolve({ senderID, key });
       });
-    } catch (err) {
+    } catch (_) {
       resolve(null);
     }
   });
@@ -47,100 +42,89 @@ function getLastMessage(api, threadID) {
 function sendMessage(api, threadID) {
   return new Promise((resolve, reject) => {
     try {
-      api.sendMessage(TEXT, threadID, err => {
-        if (err) return reject(err);
-        resolve();
-      });
+      api.sendMessage(TEXT, threadID, err => err ? reject(err) : resolve());
     } catch (err) {
       reject(err);
     }
   });
 }
 
-function startWatch(api, threadID) {
+async function startWatch(api, threadID) {
   const tid = String(threadID);
-
-  if (global._copyWatchers.has(tid)) {
-    return false;
-  }
+  if (global._copyWatchers.has(tid)) return false;
 
   const state = {
     busy: false,
-    lastHandledKey: null,
-    timer: null
+    lastSeenKey: null,
+    timer: null,
+    startedAt: Date.now()
   };
+  global._copyWatchers.set(tid, state);
+
+  // خذ خط أساس عند التشغيل، حتى لا يرد على رسالة قديمة موجودة مسبقاً.
+  const baseline = await getLastMessage(api, tid);
+  state.lastSeenKey = baseline?.key || null;
 
   const tick = async () => {
-    if (!global._copyWatchers.has(tid)) return;
+    if (!global._copyWatchers.has(tid) || state.busy) return;
+    state.busy = true;
 
-    if (!state.busy) {
-      state.busy = true;
+    try {
+      const last = await getLastMessage(api, tid);
+      // لا تتصرف عند فشل قراءة السجل أو غياب معرّف موثوق.
+      if (!last?.key) return;
 
-      try {
-        const botID = String(
-          global.GoatBot?.botID ||
-          api.getCurrentUserID?.() ||
-          ""
-        );
+      if (last.key === state.lastSeenKey) return;
+      state.lastSeenKey = last.key;
 
-        const last = await getLastMessage(api, tid);
+      const botID = String(
+        global.GoatBot?.botID || api.getCurrentUserID?.() || ""
+      );
 
-        // لا ترسل عند فشل قراءة السجل أو تعذر تحديد الرسالة.
-        if (!last || !last.key) {
-          return;
-        }
+      // لا ترد على رسائل الحساب نفسه أو على رسائل البوت التي أرسلها.
+      if (!botID || last.senderID === botID) return;
 
-        // سجّل رسالة البوت حتى لا يعاد التعامل معها.
-        if (last.senderID === botID) {
-          state.lastHandledKey = last.key;
-          return;
-        }
-
-        // لا تعاود إرسال الرد بسبب بقاء الرسالة نفسها في السجل.
-        if (last.key === state.lastHandledKey) {
-          return;
-        }
-
-        // سجّل الرسالة قبل الإرسال لمنع التكرار.
-        state.lastHandledKey = last.key;
-
-        await sendMessage(api, tid);
-      } catch (err) {
-        global.log?.error?.(
-          "COPY",
-          err.message || String(err)
-        );
-      } finally {
-        state.busy = false;
-      }
+      await sendMessage(api, tid);
+    } catch (err) {
+      global.log?.error?.("COPY", err?.message || String(err));
+    } finally {
+      state.busy = false;
     }
   };
 
-  global._copyWatchers.set(tid, state);
-
   const scheduleNext = async () => {
     await tick();
-
     if (global._copyWatchers.has(tid)) {
       state.timer = setTimeout(scheduleNext, CHECK_MS);
     }
   };
 
-  state.timer = setTimeout(scheduleNext, 500);
-
+  // أول فحص بعد 10 ثوانٍ، ثم كل 10 ثوانٍ.
+  state.timer = setTimeout(scheduleNext, CHECK_MS);
   return true;
 }
 
 function stopWatch(threadID) {
   const tid = String(threadID);
   const state = global._copyWatchers.get(tid);
-
   if (!state) return false;
 
   clearTimeout(state.timer);
   global._copyWatchers.delete(tid);
-
   return true;
+}
+
+function resolveTarget(args, currentThreadID) {
+  const first = String(args?.[0] || "").trim().toLowerCase();
+  const action = ["start", "stop", "status", "تشغيل", "إيقاف", "حالة"].includes(first)
+    ? first
+    : "start";
+  const hasAction = action !== "start" || first === "start" || first === "تشغيل";
+  const targetArg = hasAction ? args?.[1] : args?.[0];
+  return {
+    action,
+    threadID: String(targetArg || currentThreadID)
+  };
 }
 
 module.exports = {
@@ -149,21 +133,38 @@ module.exports = {
     aliases: ["copy"],
     category: "group",
     role: 2,
-    description:
-      "يراقب آخر رسالة كل 10 ثوانٍ ويمنع تكرار الرد على الرسالة نفسها"
+    description: "يراقب مجموعة كل 10 ثوانٍ ويرد مرة واحدة على كل رسالة جديدة"
   },
 
   stopWatch,
 
-  onStart: async ({ api, threadID, message }) => {
-    if (!startWatch(api, threadID)) {
+  onStart: async ({ api, threadID, args = [], message }) => {
+    const { action, threadID: targetID } = resolveTarget(args, threadID);
+
+    if (["stop", "إيقاف"].includes(action)) {
       return message.reply(
-        "⚠️ أمر النسخ يعمل بالفعل في هذه المجموعة."
+        stopWatch(targetID)
+          ? `🛑 تم إيقاف المراقبة للمجموعة ${targetID}.`
+          : `ℹ️ لا توجد مراقبة نشطة للمجموعة ${targetID}.`
       );
     }
 
+    if (["status", "حالة"].includes(action)) {
+      const active = global._copyWatchers.has(targetID);
+      return message.reply(
+        active
+          ? `✅ المراقبة نشطة للمجموعة ${targetID} (فحص كل 10 ثوانٍ).`
+          : `ℹ️ المراقبة غير نشطة للمجموعة ${targetID}.`
+      );
+    }
+
+    const started = await startWatch(api, targetID);
+    if (!started) {
+      return message.reply(`⚠️ المراقبة تعمل بالفعل للمجموعة ${targetID}.`);
+    }
+
     return message.reply(
-      "✅ تم تشغيل مراقبة الرسائل."
+      `✅ بدأت مراقبة المجموعة ${targetID}. سيتم تجاهل الرسالة الحالية والرد مرة واحدة عند ظهور رسالة جديدة، مع فحص كل 10 ثوانٍ. استخدم /انسخ إيقاف ${targetID} لإيقافها.`
     );
   }
 };
