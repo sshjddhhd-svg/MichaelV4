@@ -14,7 +14,6 @@ function _isRestoring(threadID) {
 }
 function _markRestoring(threadID) {
   if (!global._nameRestoringAt) global._nameRestoringAt = new Map();
-  if (!global._nameApis) global._nameApis = new Map();
   global._nameRestoringAt.set(threadID, Date.now());
 }
 function _unmarkRestoring(threadID) {
@@ -56,7 +55,7 @@ function startNamePoller(threadID) {
 
   const id = setInterval(async () => {
     try {
-      const api = global.api;
+      const api = global._nameApis?.get(threadID);
       if (!api) return;
 
       // القفل أُزيل → أوقف الـ poller
