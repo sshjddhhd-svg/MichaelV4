@@ -74,6 +74,13 @@ async function startWatch(api, threadID) {
       // لا تتصرف عند فشل قراءة السجل أو غياب معرّف موثوق.
       if (!last?.key) return;
 
+      // إذا تعذر أخذ خط الأساس عند التشغيل، سجّل أول رسالة مقروءة فقط
+      // ولا تعتبرها رسالة جديدة كي لا يُرسل رد على رسالة قديمة.
+      if (state.lastSeenKey === null) {
+        state.lastSeenKey = last.key;
+        return;
+      }
+
       if (last.key === state.lastSeenKey) return;
       state.lastSeenKey = last.key;
 
