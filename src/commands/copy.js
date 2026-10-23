@@ -1,120 +1,196 @@
 /**
- * أمر: انسخ
- * يراقب آخر رسالة في مجموعة محددة كل 10 ثوانٍ ويرسل الرد المحفوظ
- * مرة واحدة فقط عند ظهور رسالة جديدة من شخص آخر.
+ * أمر انسخ: راقب المجموعة، وتحقق من أحدث الرسائل كل 10 ثوانٍ.
+ * يستخدم سجل الرسائل الحديث، ويتجنب الرد المكرر على الرسالة ذاتها.
  */
 "use strict";
 
 const TEXT = require("../utils/copyMessage");
 const CHECK_MS = 10_000;
 const REPLY_DELAY_MS = 10_000;
+const HISTORY_LIMIT = 10;
 
 global._copyWatchers = global._copyWatchers || new Map();
 
-function getLastMessage(api, threadID) {
+function invokeHistory(api, threadID, limit) {
   return new Promise(resolve => {
+    let settled = false;
+    const done = (err, value) => {
+      if (settled) return;
+      settled = true;
+      resolve(err ? null : value);
+    };
     try {
-      api.getThreadHistory(threadID, 1, undefined, (err, history) => {
-        if (err || !Array.isArray(history) || history.length === 0) {
-          return resolve(null);
-        }
-
-        const msg = history[history.length - 1];
-        if (!msg || !msg.senderID) return resolve(null);
-
-        const senderID = String(msg.senderID);
-        const messageID = msg.messageID || msg.messageId || msg.id;
-        const timestamp = msg.timestamp || msg.createdAt || "";
-        const body = msg.body || msg.text || "";
-        const key = messageID
-          ? String(messageID)
-          : timestamp || body
-            ? `${senderID}:${timestamp}:${body}`
-            : null;
-
-        resolve({ senderID, key });
-      });
-    } catch (_) {
-      resolve(null);
-    }
-  });
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function sendTypingIndicator(api, threadID) {
-  // Show the platform's normal typing indicator when the adapter supports it.
-  // This is a user-experience cue, not an attempt to bypass bot detection.
-  return new Promise(resolve => {
-    try {
-      if (typeof api.sendTypingIndicator !== "function") return resolve(false);
-      api.sendTypingIndicator(threadID, () => resolve(true));
-    } catch (_) {
-      resolve(false);
-    }
-  });
-}
-
-async function sendMessage(api, threadID) {
-  // Keep a consistent 10-second composing delay before sending the saved reply.
-  await sendTypingIndicator(api, threadID);
-  await sleep(REPLY_DELAY_MS);
-  return new Promise((resolve, reject) => {
-    try {
-      api.sendMessage(TEXT, threadID, err => err ? reject(err) : resolve());
+      if (typeof api.getThreadHistory !== "function") return done(new Error("getThreadHistory is unavailable"));
+      // FCA versions vary slightly; standard callback signature is (threadID, amount, timestamp, callback).
+      const returned = api.getThreadHistory(threadID, limit, null, done);
+      if (returned && typeof returned.then === "function") returned.then(v => done(null, v), done);
     } catch (err) {
-      reject(err);
+      done(err);
     }
   });
+}
+
+function normalizeMessages(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (raw && Array.isArray(raw.messages)) return raw.messages;
+  if (raw && Array.isArray(raw.threadMessages)) return raw.threadMessages;
+  if (raw && Array.isArray(raw.data)) return raw.data;
+  return [];
+}
+
+function messageKey(msg) {
+  if (!msg || typeof msg !== "object") return null;
+  const id = msg.messageID ?? msg.messageId ?? msg.message_id ?? msg.id;
+  if (id !== undefined && id !== null && String(id)) return String(id);
+  const sender = msg.senderID ?? msg.senderId ?? msg.author ?? msg.userID;
+  const ts = msg.timestamp ?? msg.createdAt ?? msg.created_at ?? msg.timestampMs;
+  const body = msg.body ?? msg.text ?? msg.message ?? "";
+  if (sender != null && (ts != null || body)) return `${sender}:${ts ?? ""}:${String(body)}`;
+  return null;
+}
+
+function senderOf(msg) {
+  const value = msg?.senderID ?? msg?.senderId ?? msg?.author ?? msg?.userID ?? msg?.userId;
+  return value == null ? "" : String(value);
+}
+
+function newestMessage(raw) {
+  const messages = normalizeMessages(raw).filter(m => m && typeof m === "object");
+  if (!messages.length) return null;
+  // APIs may return history newest-first or oldest-first. Prefer numeric timestamps,
+  // otherwise use the last returned item, matching the API's conventional ordering.
+  const withTime = messages.map((m, index) => ({
+    m, index,
+    time: Number(m.timestamp ?? m.timestampMs ?? m.createdAt ?? m.created_at ?? 0)
+  }));
+  if (withTime.some(x => Number.isFinite(x.time) && x.time > 0)) {
+    withTime.sort((a, b) => b.time - a.time);
+    return withTime[0].m;
+  }
+  return messages[messages.length - 1];
+}
+
+async function getRecentMessages(api, threadID) {
+  const raw = await invokeHistory(api, threadID, HISTORY_LIMIT);
+  return normalizeMessages(raw);
+}
+
+async function sendPlain(api, threadID, text) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (err, result) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err);
+      else resolve(result);
+    };
+    try {
+      const ret = api.sendMessage(text, threadID, done);
+      if (ret && typeof ret.then === "function") ret.then(v => done(null, v), done);
+    } catch (err) {
+      done(err);
+    }
+  });
+}
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function sendReply(api, threadID) {
+  // Human typing is handled centrally by outgoingThrottle; this fixed delay
+  // additionally fulfills the requested 10-second wait before this reply.
+  await sleep(REPLY_DELAY_MS);
+  return sendPlain(api, threadID, TEXT);
+}
+
+function resolveLatestHumanMessage(messages, botID) {
+  const sorted = messages
+    .map((msg, index) => ({ msg, index, key: messageKey(msg), senderID: senderOf(msg) }))
+    .filter(x => x.key && x.senderID && x.senderID !== String(botID));
+
+  if (!sorted.length) return null;
+
+  const withTime = sorted.map(x => ({
+    ...x,
+    time: Number(x.msg.timestamp ?? x.msg.timestampMs ?? x.msg.createdAt ?? x.msg.created_at ?? 0)
+  }));
+  if (withTime.some(x => Number.isFinite(x.time) && x.time > 0)) {
+    withTime.sort((a, b) => b.time - a.time);
+    return withTime[0];
+  }
+  return sorted[sorted.length - 1];
 }
 
 async function startWatch(api, threadID) {
-  const tid = String(threadID);
+  const tid = String(threadID || "").trim();
+  if (!tid) throw new Error("معرّف المجموعة فارغ");
   if (global._copyWatchers.has(tid)) return false;
 
   const state = {
     busy: false,
-    lastSeenKey: null,
+    lastObservedKey: null,
     timer: null,
-    startedAt: Date.now()
+    stopped: false,
+    startedAt: Date.now(),
+    lastErrorLogAt: 0
   };
   global._copyWatchers.set(tid, state);
 
-  // خذ خط أساس عند التشغيل، حتى لا يرد على رسالة قديمة موجودة مسبقاً.
-  const baseline = await getLastMessage(api, tid);
-  state.lastSeenKey = baseline?.key || null;
+  const botID = String(global.GoatBot?.botID || api.getCurrentUserID?.() || "");
+  try {
+    const initial = await getRecentMessages(api, tid);
+    const latest = newestMessage(initial);
+    state.lastObservedKey = latest ? messageKey(latest) : null;
+  } catch (err) {
+    // Do not fail to start if the history endpoint is temporarily unavailable.
+    global.log?.warn?.("COPY", `تعذر أخذ خط الأساس للمجموعة ${tid}: ${err?.message || err}`);
+  }
 
   const tick = async () => {
-    if (!global._copyWatchers.has(tid) || state.busy) return;
+    if (state.stopped || !global._copyWatchers.has(tid) || state.busy) return;
     state.busy = true;
-
     try {
-      const last = await getLastMessage(api, tid);
-      // لا تتصرف عند فشل قراءة السجل أو غياب معرّف موثوق.
-      if (!last?.key) return;
+      const messages = await getRecentMessages(api, tid);
+      const latest = newestMessage(messages);
+      const key = latest ? messageKey(latest) : null;
+      const senderID = senderOf(latest);
 
-      // إذا تعذر أخذ خط الأساس عند التشغيل، سجّل أول رسالة مقروءة فقط
-      // ولا تعتبرها رسالة جديدة كي لا يُرسل رد على رسالة قديمة.
-      if (state.lastSeenKey === null) {
-        state.lastSeenKey = last.key;
+      // Fail closed if the API provides no reliable identity.
+      if (!latest || !key || !senderID) return;
+
+      if (state.lastObservedKey === null) {
+        // First successful read is only a baseline; it is not a new message.
+        state.lastObservedKey = key;
+        return;
+      }
+      if (key === state.lastObservedKey) return;
+
+      // Record before waiting to prevent parallel ticks from scheduling duplicates.
+      state.lastObservedKey = key;
+      if (senderID === botID || !botID) return;
+
+      // Re-check shortly before send: if another person has spoken meanwhile,
+      // defer to the most recent message instead of replying to stale content.
+      await sleep(REPLY_DELAY_MS);
+      if (state.stopped || !global._copyWatchers.has(tid)) return;
+
+      const freshMessages = await getRecentMessages(api, tid);
+      const freshLatest = newestMessage(freshMessages);
+      const freshKey = freshLatest ? messageKey(freshLatest) : null;
+      const freshSender = senderOf(freshLatest);
+
+      if (!freshKey || freshKey !== key || freshSender !== senderID || freshSender === botID) {
+        if (freshKey) state.lastObservedKey = freshKey;
         return;
       }
 
-      if (last.key === state.lastSeenKey) return;
-      state.lastSeenKey = last.key;
-
-      const botID = String(
-        global.GoatBot?.botID || api.getCurrentUserID?.() || ""
-      );
-
-      // لا ترد على رسائل الحساب نفسه أو على رسائل البوت التي أرسلها.
-      if (!botID || last.senderID === botID) return;
-
-      await sendMessage(api, tid);
+      await sendPlain(api, tid, TEXT);
+      global.log?.info?.("COPY", `تم إرسال الرد للمجموعة ${tid} بعد رسالة ${key}`);
     } catch (err) {
-      global.log?.error?.("COPY", err?.message || String(err));
+      const now = Date.now();
+      if (now - state.lastErrorLogAt > 30_000) {
+        state.lastErrorLogAt = now;
+        global.log?.error?.("COPY", `مشكلة مراقبة ${tid}: ${err?.message || err}`);
+      }
     } finally {
       state.busy = false;
     }
@@ -122,12 +198,12 @@ async function startWatch(api, threadID) {
 
   const scheduleNext = async () => {
     await tick();
-    if (global._copyWatchers.has(tid)) {
+    if (!state.stopped && global._copyWatchers.has(tid)) {
       state.timer = setTimeout(scheduleNext, CHECK_MS);
     }
   };
 
-  // أول فحص بعد 10 ثوانٍ، ثم كل 10 ثوانٍ.
+  // Run one initial read immediately; subsequent reads every 10 seconds.
   state.timer = setTimeout(scheduleNext, CHECK_MS);
   return true;
 }
@@ -136,23 +212,19 @@ function stopWatch(threadID) {
   const tid = String(threadID);
   const state = global._copyWatchers.get(tid);
   if (!state) return false;
-
-  clearTimeout(state.timer);
+  state.stopped = true;
+  if (state.timer) clearTimeout(state.timer);
   global._copyWatchers.delete(tid);
   return true;
 }
 
 function resolveTarget(args, currentThreadID) {
   const first = String(args?.[0] || "").trim().toLowerCase();
-  const action = ["start", "stop", "status", "تشغيل", "إيقاف", "حالة"].includes(first)
-    ? first
-    : "start";
-  const hasAction = action !== "start" || first === "start" || first === "تشغيل";
+  const actions = ["start", "stop", "status", "تشغيل", "إيقاف", "حالة"];
+  const action = actions.includes(first) ? first : "start";
+  const hasAction = actions.includes(first);
   const targetArg = hasAction ? args?.[1] : args?.[0];
-  return {
-    action,
-    threadID: String(targetArg || currentThreadID)
-  };
+  return { action, threadID: String(targetArg || currentThreadID || "").trim() };
 }
 
 module.exports = {
@@ -161,13 +233,14 @@ module.exports = {
     aliases: ["copy"],
     category: "group",
     role: 2,
-    description: "يراقب مجموعة كل 10 ثوانٍ وينتظر 10 ثوانٍ قبل إرسال الرد"
+    description: "يراقب الرسائل كل 10 ثوانٍ وينتظر 10 ثوانٍ قبل إرسال الرد"
   },
 
   stopWatch,
 
   onStart: async ({ api, threadID, args = [], message }) => {
     const { action, threadID: targetID } = resolveTarget(args, threadID);
+    if (!targetID) return message.reply("❌ لم أستطع تحديد المجموعة.");
 
     if (["stop", "إيقاف"].includes(action)) {
       return message.reply(
@@ -178,21 +251,23 @@ module.exports = {
     }
 
     if (["status", "حالة"].includes(action)) {
-      const active = global._copyWatchers.has(targetID);
+      const state = global._copyWatchers.get(targetID);
       return message.reply(
-        active
-          ? `✅ المراقبة نشطة للمجموعة ${targetID} (فحص كل 10 ثوانٍ).`
+        state
+          ? `✅ المراقبة نشطة للمجموعة ${targetID}. فحص كل 10 ثوانٍ، وانتظار 10 ثوانٍ قبل الرد.`
           : `ℹ️ المراقبة غير نشطة للمجموعة ${targetID}.`
       );
     }
 
-    const started = await startWatch(api, targetID);
-    if (!started) {
-      return message.reply(`⚠️ المراقبة تعمل بالفعل للمجموعة ${targetID}.`);
+    try {
+      const started = await startWatch(api, targetID);
+      if (!started) return message.reply(`⚠️ المراقبة تعمل بالفعل للمجموعة ${targetID}.`);
+      return message.reply(
+        `✅ بدأت مراقبة المجموعة ${targetID}. الفحص كل 10 ثوانٍ والانتظار 10 ثوانٍ قبل الرد على أحدث رسالة جديدة. استخدم /انسخ إيقاف ${targetID} للإيقاف.`
+      );
+    } catch (err) {
+      global.log?.error?.("COPY", err?.message || String(err));
+      return message.reply(`❌ تعذر بدء مراقبة المجموعة: ${err?.message || err}`);
     }
-
-    return message.reply(
-      `✅ بدأت مراقبة المجموعة ${targetID}. سيتم تجاهل الرسالة الحالية والرد مرة واحدة عند ظهور رسالة جديدة، مع فحص كل 10 ثوانٍ وانتظار 10 ثوانٍ قبل الرد. استخدم /انسخ إيقاف ${targetID} لإيقافها.`
-    );
   }
 };
