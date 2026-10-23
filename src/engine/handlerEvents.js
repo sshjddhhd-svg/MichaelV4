@@ -192,6 +192,23 @@ async function onEventCmds(api, event, commands) {
 
   const role = getRole(senderID);
 
+  // Dashboard-configured keyword replies are intentionally admin-only.
+  // A plain exact keyword match is required; non-admin messages never trigger them.
+  const autoReply = global.GoatBot?.config?.adminKeywordReply || {};
+  const keyword = String(autoReply.keyword || "").trim();
+  if (autoReply.enabled === true && keyword && role >= 2 &&
+      body.trim().toLocaleLowerCase() === keyword.toLocaleLowerCase()) {
+    const replyText = String(autoReply.response || "").trim();
+    if (replyText) {
+      try {
+        await api.sendMessage(replyText, String(threadID));
+        return;
+      } catch (e) {
+        global.log?.error?.("AUTO_REPLY", e.message || String(e));
+      }
+    }
+  }
+
   // /lock on is a true silent lock: non-admins are ignored before ANY chat hook
   // can answer. This prevents AI/chatmode or another onChat module from
   // accidentally replying while the public command layer is locked.
