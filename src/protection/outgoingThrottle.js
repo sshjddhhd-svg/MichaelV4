@@ -40,29 +40,25 @@ function enqueue(threadID, task) {
 async function waitForHumanTyping(api, threadID, message) {
   const cfg = limits();
   if (!cfg.typingEnabled) return;
-  const text = typeof message === "string" ? message : message?.body || "";
-  let delay = 0;
-  try {
-    delay = Number(global.utils?.calcHumanTypingDelay?.(text)) || 0;
-  } catch (_) {}
-  if (!delay) delay = cfg.typingMinMs;
-  delay = Math.min(cfg.typingMaxMs, Math.max(cfg.typingMinMs, delay));
-
-  // FCA exposes sendTypingIndicator in some releases, but callback/promise
-  // behavior differs. Start it best-effort without blocking message delivery.
-  let typingStarted = false;
-  try {
-    if (typeof api?.sendTypingIndicator === "function") {
-      api.sendTypingIndicator(threadID, () => {});
-      typingStarted = true;
+  const typing = require("./humanTyping");
+  const delay = (() => {
+    try {
+      const text = typeof message === "string" ? message : message?.body || "";
+      const calculated = Number(global.utils?.calcHumanTypingDelay?.(text)) || 0;
+      return Math.min(cfg.typingMaxMs, Math.max(cfg.typingMinMs, calculated || cfg.typingMinMs));
+    } catch (_) {
+      return cfg.typingMinMs;
     }
-  } catch (_) {}
+  })();
 
-  await sleep(delay);
-
-  // Do not try to hide automation or bypass platform checks; this is only a
-  // bounded UX pause and optional native typing hint.
-  return { delay, typingStarted };
+  try {
+    // This is the shared typing integration used by the app (including FCA's
+    // simulator when available), not a separate delay-only implementation.
+    await typing.beforeSend(api, threadID, message, delay);
+  } catch (err) {
+    global.log?.warn?.("TYPING", err?.message || String(err));
+    await sleep(delay);
+  }
 }
 async function drain(key) {
   const q = queues.get(key);
