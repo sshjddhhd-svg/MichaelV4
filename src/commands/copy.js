@@ -245,11 +245,9 @@ module.exports = {
     if (!targetID) return message.reply("❌ لم أستطع تحديد المجموعة.");
 
     if (["stop", "إيقاف"].includes(action)) {
-      return message.reply(
-        stopWatch(targetID)
-          ? `🛑 تم إيقاف المراقبة للمجموعة ${targetID}.`
-          : `ℹ️ لا توجد مراقبة نشطة للمجموعة ${targetID}.`
-      );
+      return stopWatch(targetID)
+        ? message.reply("تم ايقاف المراقبة بهذه المجموعة")
+        : message.reply("لا توجد مراقبة نشطة بهذه المجموعة");
     }
 
     if (["status", "حالة"].includes(action)) {
@@ -264,9 +262,7 @@ module.exports = {
     try {
       const started = await startWatch(api, targetID);
       if (!started) return message.reply(`⚠️ المراقبة تعمل بالفعل للمجموعة ${targetID}.`);
-      return message.reply(
-        `✅ بدأت مراقبة المجموعة ${targetID}. أفحص أحدث رسالة كل 10 ثوانٍ؛ إذا لم تكن من البوت أرسل الرد مرة واحدة. استخدم /انسخ إيقاف ${targetID} للإيقاف.`
-      );
+      return message.reply("تم تفعيل مراقبة المجموعة");
     } catch (err) {
       global.log?.error?.("COPY", err?.message || String(err));
       return message.reply(`❌ تعذر بدء مراقبة المجموعة: ${err?.message || err}`);
