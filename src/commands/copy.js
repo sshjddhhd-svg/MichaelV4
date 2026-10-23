@@ -96,6 +96,12 @@ async function sendPlain(api, threadID, text) {
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 
+async function sendReply(api, threadID) {
+  // A full 10-second wait after a candidate message is detected.
+  await sleep(REPLY_DELAY_MS);
+  return sendPlain(api, threadID, TEXT);
+}
+
 async function startWatch(api, threadID) {
   const tid = String(threadID || "").trim();
   if (!tid) throw new Error("معرّف المجموعة فارغ");
@@ -166,7 +172,7 @@ async function startWatch(api, threadID) {
         return;
       }
 
-      await sendPlain(api, tid, TEXT);
+      await sendReply(api, tid);
       global.log?.info?.("COPY", `تم إرسال الرد للمجموعة ${tid} بعد رسالة ${key}`);
     } catch (err) {
       const now = Date.now();
