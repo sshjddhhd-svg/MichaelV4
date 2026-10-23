@@ -6,7 +6,6 @@
 
 const TEXT = require("../utils/copyMessage");
 const CHECK_MS = 10_000;
-const REPLY_DELAY_MS = 10_000;
 const HISTORY_LIMIT = 10;
 
 global._copyWatchers = global._copyWatchers || new Map();
@@ -96,11 +95,6 @@ async function sendPlain(api, threadID, text) {
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 
-async function sendReply(api, threadID) {
-  // A full 10-second wait after a candidate message is detected.
-  await sleep(REPLY_DELAY_MS);
-  return sendPlain(api, threadID, TEXT);
-}
 
 async function startWatch(api, threadID) {
   const tid = String(threadID || "").trim();
