@@ -6,6 +6,7 @@
 
 const TEXT = require("../utils/copyMessage");
 const CHECK_MS = 10_000;
+const REPLY_DELAY_MS = 10_000;
 const HISTORY_LIMIT = 10;
 
 global._copyWatchers = global._copyWatchers || new Map();
