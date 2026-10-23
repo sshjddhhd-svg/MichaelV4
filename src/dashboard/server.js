@@ -558,31 +558,57 @@ function startDashboard(port = 5000, healthPort = null) {
   });
 
   // ── Messenger: thread list ──────────────────────────────────────────────────
-  app.get("/api/messenger/threads", auth, (_, res) => {
+  app.get("/api/messenger/threads", auth, async (_, res) => {
     try {
+      const api = global.GoatBot?.fcaApi;
       const allData = global.GoatBot?.allThreadData || {};
-      const threads = [];
+      const map = new Map();
+      const add = (thread) => {
+        const tid = String(thread.tid || "");
+        if (!/^\d+$/.test(tid)) return;
+        const previous = map.get(tid) || {};
+        map.set(tid, { ...previous, ...thread, tid,
+          name: thread.name || previous.name || "محادثة " + tid.slice(-4) });
+      };
       for (const [tid, data] of Object.entries(allData)) {
         const last = _threadLastMsg.get(String(tid));
-        threads.push({
-          tid: String(tid),
-          name: data?.threadName || data?.name || `غروب ${tid}`,
+        add({ tid, name: data?.threadName || data?.name || "",
           type: data?.isGroup ? "group" : "dm",
           memberCount: data?.participantIDs?.length || 0,
-          lastBody: last?.body || "",
-          lastTs: last?.ts || 0,
-          lastIsFromBot: last?.isFromBot || false,
-        });
+          lastBody: last?.body || "", lastTs: last?.ts || 0 });
       }
-      // Also include threads we have messages for but not in allThreadData
       for (const [tid, msgs] of _threadMsgs.entries()) {
-        if (!allData[tid] && msgs.length) {
+        if (msgs.length) {
           const last = _threadLastMsg.get(tid);
-          threads.push({ tid, name: `غروب ${tid}`, type: "group", memberCount: 0, lastBody: last?.body || "", lastTs: last?.ts || 0 });
+          add({ tid, name: map.get(tid)?.name || "", type: map.get(tid)?.type || "group",
+            memberCount: map.get(tid)?.memberCount || 0, lastBody: last?.body || "",
+            lastTs: last?.ts || 0 });
         }
       }
-      threads.sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0));
-      res.json({ ok: true, threads });
+      // Ask the live account for real thread names and group metadata, not just cached IDs.
+      if (api && typeof api.getThreadList === "function") {
+        try {
+          const live = await Promise.race([
+            new Promise((resolve, reject) => api.getThreadList(100, null, ["INBOX"], (err, list) => err ? reject(err) : resolve(list || []))),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("getThreadList timeout")), 12000))
+          ]);
+          for (const t of live) {
+            const tid = String(t.threadID || t.tid || "");
+            if (!/^\d+$/.test(tid)) continue;
+            const last = _threadLastMsg.get(tid);
+            add({ tid, name: t.name || t.threadName || map.get(tid)?.name || "",
+              type: t.isGroup ? "group" : "dm",
+              memberCount: (t.participantIDs || []).length || map.get(tid)?.memberCount || 0,
+              image: t.imageSrc || null,
+              lastBody: last?.body || t.snippet || map.get(tid)?.lastBody || "",
+              lastTs: last?.ts || Number(t.timestamp || 0) || map.get(tid)?.lastTs || 0 });
+          }
+        } catch (e) {
+          global.log?.warn?.("DASH", "Live thread list: " + (e.message || e));
+        }
+      }
+      const threads = [...map.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0));
+      res.json({ ok: true, online: !!api, threads });
     } catch (e) { res.json({ ok: false, error: e.message }); }
   });
 
@@ -638,7 +664,9 @@ function startDashboard(port = 5000, healthPort = null) {
     const api = global.GoatBot?.fcaApi;
     if (!api) return res.json({ ok: false, error: "البوت غير متصل" });
     const { threadID, body, silent } = req.body;
-    if (!threadID || !body) return res.json({ ok: false, error: "threadID و body مطلوبان" });
+    if (!threadID || !body) return res.json({ ok: false, error: "اختر محادثة واكتب الرسالة أولاً" });
+    if (!/^\\d+$/.test(String(threadID))) return res.json({ ok: false, error: "معرّف المحادثة غير صالح" });
+    if (String(body).length > 5000) return res.json({ ok: false, error: "الرسالة أطول من الحد المسموح (5000 حرف)" });
     const msg = { body: String(body) };
     if (silent) msg.noNotif = true;
     api.sendMessage(msg, String(threadID), (err, info) => {
