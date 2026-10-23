@@ -172,10 +172,7 @@ async function startWatch(api, threadID) {
 
       state.lastObservedKey = key;
       // If our message is latest, the desired condition is already satisfied.
-      if (senderID === botID) {
-        state.lastRepliedToKey = null;
-        return;
-      }
+      if (senderID === botID) return;
       // Ignore the same human message if our outgoing message has not appeared
       // in history yet, or if the API returns stale history temporarily.
       if (state.lastRepliedToKey === key) return;
