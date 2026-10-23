@@ -6,7 +6,7 @@ const test = require("node:test");
 function freshCopyCommand() {
   delete require.cache[require.resolve("../src/commands/copy")];
   delete require.cache[require.resolve("../src/utils/copyMessage")];
-  global._copyWatchers = new Map();
+  global._dracarysAutoJobs = new Map();
   global.GoatBot = { botID: "bot-1", config: {}, protection: {} };
   global.log = { info() {}, warn() {}, error() {} };
   return require("../src/commands/copy");
@@ -15,9 +15,6 @@ function freshCopyCommand() {
 function fakeApi(historyRef) {
   return {
     getCurrentUserID: () => "bot-1",
-    getThreadHistory(threadID, limit, timestamp, callback) {
-      queueMicrotask(() => callback(null, historyRef.messages.slice(-limit)));
-    },
     sendMessage(message, threadID, callback) {
       historyRef.sent.push({ message, threadID, at: Date.now() });
       queueMicrotask(() => callback?.(null, { messageID: `sent-${historyRef.sent.length}` }));
@@ -25,22 +22,59 @@ function fakeApi(historyRef) {
   };
 }
 
-test("copy watcher starts and does not reply to the baseline message", async () => {
-  const history = {
-    messages: [{ messageID: "old-1", senderID: "user-2", body: "old", timestamp: 100 }],
-    sent: []
-  };
+test("copy command starts automatic sending with a short confirmation", async () => {
+  const history = { sent: [] };
   const cmd = freshCopyCommand();
   const api = fakeApi(history);
-  const state = global._copyWatchers;
-  const started = await cmd.onStart({
+  const replies = [];
+  await cmd.onStart({
     api, threadID: "group-1", args: [],
-    message: { reply: async () => undefined }
+    message: { reply: async text => replies.push(text) }
   });
-  assert.equal(started, undefined);
-  assert.equal(state.has("group-1"), true);
-  assert.equal(history.sent.length, 0);
+
+  assert.equal(global._dracarysAutoJobs.has("group-1"), true);
+  assert.deepEqual(replies, ["تم تفعيل مراقبة المجموعة"]);
+  assert.equal(history.sent.length, 0, "first automatic message must wait 20–35 seconds");
   cmd.stopWatch("group-1");
+  assert.equal(global._dracarysAutoJobs.has("group-1"), false);
+});
+
+test("copy command does not create duplicate automatic jobs for the same group", async () => {
+  const history = { sent: [] };
+  const cmd = freshCopyCommand();
+  const api = fakeApi(history);
+  const replies = [];
+  const ctx = {
+    api, threadID: "group-2", args: [],
+    message: { reply: async text => replies.push(text) }
+  };
+
+  await cmd.onStart(ctx);
+  await cmd.onStart(ctx);
+  assert.equal(global._dracarysAutoJobs.size, 1);
+  assert.deepEqual(replies, [
+    "تم تفعيل مراقبة المجموعة",
+    "الإرسال التلقائي يعمل بالفعل بهذه المجموعة"
+  ]);
+  cmd.stopWatch("group-2");
+});
+
+test("stop command stops the active automatic job and keeps confirmation short", async () => {
+  const cmd = freshCopyCommand();
+  const api = fakeApi({ sent: [] });
+  const replies = [];
+  await cmd.onStart({
+    api, threadID: "group-3", args: [],
+    message: { reply: async text => replies.push(text) }
+  });
+
+  const stop = require("../src/commands/stop");
+  await stop.onStart({
+    threadID: "group-3",
+    message: { reply: async text => replies.push(text) }
+  });
+  assert.equal(global._dracarysAutoJobs.has("group-3"), false);
+  assert.equal(replies.at(-1), "تم ايقاف المراقبة بهذه المجموعة");
 });
 
 test("outgoing typing guard delays send and preserves callbacks", async () => {
@@ -68,33 +102,4 @@ test("outgoing typing guard delays send and preserves callbacks", async () => {
   assert.equal(result.ok, true);
   assert.ok(sentAt - start >= 20, `send delay was only ${sentAt - start}ms`);
   guard.stop();
-});
-
-test("copy command parses several common history response shapes", () => {
-  const cmd = freshCopyCommand();
-  assert.equal(typeof cmd.onStart, "function");
-  assert.equal(typeof cmd.stopWatch, "function");
-});
-
-
-test("copy watcher sends once after a new human message remains latest", async () => {
-  const history = {
-    messages: [{ messageID: "base-1", senderID: "user-2", body: "old", timestamp: 100 }],
-    sent: []
-  };
-  const cmd = freshCopyCommand();
-  const api = fakeApi(history);
-  await cmd.onStart({
-    api, threadID: "group-2", args: [],
-    message: { reply: async () => undefined }
-  });
-
-  const state = global._copyWatchers.get("group-2");
-  // Exercise a watcher iteration without waiting for the normal 10-second timer:
-  // append a test-only method would be invasive, so verify the watcher baseline and
-  // scheduling state, then stop to leave no timers behind.
-  assert.equal(state.lastObservedKey, "base-1");
-  assert.equal(state.stopped, false);
-  cmd.stopWatch("group-2");
-  assert.equal(global._copyWatchers.has("group-2"), false);
 });
