@@ -613,10 +613,37 @@ function startDashboard(port = 5000, healthPort = null) {
   });
 
   // ── Messenger: messages for a thread ────────────────────────────────────────
-  app.get("/api/messenger/thread/:tid/messages", auth, (req, res) => {
-    const tid = req.params.tid;
+  app.get("/api/messenger/thread/:tid/messages", auth, async (req, res) => {
+    const tid = String(req.params.tid || "");
+    if (!/^\\d+$/.test(tid)) return res.json({ ok: false, error: "معرّف المحادثة غير صالح" });
+    const api = global.GoatBot?.fcaApi;
+    // Prefer live history when the connected account/library supports it.
+    if (api && typeof api.getThreadHistory === "function") {
+      try {
+        const history = await Promise.race([
+          new Promise((resolve, reject) => api.getThreadHistory(tid, 50, null, (err, list) => err ? reject(err) : resolve(list || []))),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("history timeout")), 12000))
+        ]);
+        if (Array.isArray(history) && history.length) {
+          const botID = String(global.GoatBot?.botID || "");
+          const messages = history.map(m => ({
+            messageID: m.messageID || m.id || null,
+            body: m.body || m.snippet || "",
+            senderID: String(m.senderID || m.author || ""),
+            senderName: m.senderName || m.name || "",
+            ts: Number(m.timestamp || m.ts || Date.now()),
+            attachments: m.attachments || [],
+            isFromBot: String(m.senderID || m.author || "") === botID
+          })).reverse();
+          res.json({ ok: true, source: "live", messages: messages.slice(-100) });
+          return;
+        }
+      } catch (e) {
+        global.log?.warn?.("DASH", "Live message history: " + (e.message || e));
+      }
+    }
     const msgs = _threadMsgs.get(tid) || [];
-    res.json({ ok: true, messages: msgs.slice(-100) });
+    res.json({ ok: true, source: "memory", messages: msgs.slice(-100) });
   });
 
   // ── Messenger: thread info ──────────────────────────────────────────────────
