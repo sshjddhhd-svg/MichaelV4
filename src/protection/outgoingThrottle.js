@@ -48,14 +48,22 @@ async function waitForHumanTyping(api, threadID, message) {
   if (!delay) delay = cfg.typingMinMs;
   delay = Math.min(cfg.typingMaxMs, Math.max(cfg.typingMinMs, delay));
 
+  // FCA exposes sendTypingIndicator in some releases, but callback/promise
+  // behavior differs. Start it best-effort without blocking message delivery.
+  let typingStarted = false;
   try {
-    await global.utils?.simulateTyping?.(api, threadID, delay);
-  } catch (err) {
-    global.log?.warn?.("TYPING", err?.message || String(err));
-    await sleep(delay);
-  }
-}
+    if (typeof api?.sendTypingIndicator === "function") {
+      api.sendTypingIndicator(threadID, () => {});
+      typingStarted = true;
+    }
+  } catch (_) {}
 
+  await sleep(delay);
+
+  // Do not try to hide automation or bypass platform checks; this is only a
+  // bounded UX pause and optional native typing hint.
+  return { delay, typingStarted };
+}
 async function drain(key) {
   const q = queues.get(key);
   if (!q || q.running) return;
