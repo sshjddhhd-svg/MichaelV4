@@ -22,7 +22,7 @@
 })();
 
 process.on("unhandledRejection", e => { try { (global.log?.error || console.error)("Djamel-Fca Architecte", e?.message || String(e)); } catch (_) {} });
-process.on("uncaughtException",  e => { try { (global.log?.error || console.error)("Djamel-Fca Architecte", e?.message || String(e)); } catch (_) {} });
+process.on("uncaughtException", e => { try { (global.log?.error || console.error)("FATAL", e?.stack || e?.message || String(e)); } catch (_) {} setTimeout(() => process.exit(1), 250).unref?.(); });
 
 const fs       = require("fs-extra");
 const path     = require("path");
