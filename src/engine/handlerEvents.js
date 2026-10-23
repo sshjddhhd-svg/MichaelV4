@@ -60,14 +60,9 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function buildMessage(api, event) {
   return {
-    reply: async (msg, cb) => {
-      try {
-        const text = typeof msg === "string" ? msg : msg?.body || "";
-        const delay = global.utils?.calcHumanTypingDelay?.(text) || 1000;
-        await global.utils?.simulateTyping?.(api, event.threadID, delay);
-      } catch (_) {}
-      return api.sendMessage(msg, event.threadID, cb);
-    },
+    // All outgoing sends pass through outgoingThrottle, which owns the single
+    // typing delay and per-thread send queue. Avoid simulating typing twice.
+    reply: async (msg, cb) => api.sendMessage(msg, event.threadID, cb),
     unsend:  (mid, cb)        => { try { api.unsendMessage(mid || event.messageID, cb); } catch (_) {} },
     react:   (emoji, mid, cb) => { try { api.setMessageReaction(emoji, mid || event.messageID, () => {}, true); } catch (_) {} },
     send:    (msg, tid, cb)   => api.sendMessage(msg, tid || event.threadID, cb),
