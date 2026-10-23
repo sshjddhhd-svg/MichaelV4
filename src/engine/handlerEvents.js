@@ -201,7 +201,9 @@ async function onEventCmds(api, event, commands) {
     const replyText = String(autoReply.response || "").trim();
     if (replyText) {
       try {
-        await api.sendMessage(replyText, String(threadID));
+        await new Promise((resolve, reject) => {
+          api.sendMessage(replyText, String(threadID), err => err ? reject(err) : resolve());
+        });
         return;
       } catch (e) {
         global.log?.error?.("AUTO_REPLY", e.message || String(e));
