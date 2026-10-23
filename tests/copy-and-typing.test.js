@@ -47,7 +47,7 @@ test("outgoing typing guard delays send and preserves callbacks", async () => {
   global.GoatBot = { config: { outgoingThrottle: { typingMinMs: 25, typingMaxMs: 25, minIntervalMs: 0 } } };
   global.utils = {
     calcHumanTypingDelay: () => 25,
-    simulateTyping: async (_api, _thread, _delay) => {}
+    simulateTyping: async (_api, _thread, delay) => new Promise(resolve => setTimeout(resolve, delay))
   };
   global.log = { warn() {} };
   const guardPath = require.resolve("../src/protection/outgoingThrottle");
