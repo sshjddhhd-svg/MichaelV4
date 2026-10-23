@@ -1,38 +1,59 @@
 /**
- * Djamel-Fca Architecte Core — Outgoing Message Guard
- * Copyright © 2026 DJAMEL
- * Purpose: serialize outgoing messages per thread and enforce a safe send rate.
+ * Outgoing message guard with per-thread serialization and optional typing delay.
+ * This protects against bursts; it does not attempt to evade platform safeguards.
  */
 "use strict";
 
 const queues = new Map();
-const patched = new WeakSet();
+const patched = new WeakMap();
 let active = false;
 
-const cfg = () => global.GoatBot?.config?.outgoingThrottle || {};
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const getCfg = () => global.GoatBot?.config?.outgoingThrottle || {};
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function limits() {
-  const c = cfg();
+  const c = getCfg();
   return {
     minIntervalMs: Math.max(0, Number(c.minIntervalMs ?? 350)),
     maxQueuePerThread: Math.max(1, Number(c.maxQueuePerThread ?? 12)),
+    typingEnabled: c.humanTyping !== false,
+    typingMinMs: Math.max(0, Number(c.typingMinMs ?? 500)),
+    typingMaxMs: Math.max(0, Number(c.typingMaxMs ?? 2500)),
   };
 }
 
 function enqueue(threadID, task) {
   const key = String(threadID || "global");
   const q = queues.get(key) || { running: false, items: [], lastSent: 0 };
-  const { maxQueuePerThread } = limits();
+  const cfg = limits();
 
-  if (q.items.length >= maxQueuePerThread) {
+  if (q.items.length >= cfg.maxQueuePerThread) {
     return Promise.reject(new Error("OUTGOING_QUEUE_FULL"));
   }
 
   const promise = new Promise((resolve, reject) => q.items.push({ task, resolve, reject }));
   queues.set(key, q);
-  drain(key).catch(() => {});
+  void drain(key);
   return promise;
+}
+
+async function waitForHumanTyping(api, threadID, message) {
+  const cfg = limits();
+  if (!cfg.typingEnabled) return;
+  const text = typeof message === "string" ? message : message?.body || "";
+  let delay = 0;
+  try {
+    delay = Number(global.utils?.calcHumanTypingDelay?.(text)) || 0;
+  } catch (_) {}
+  if (!delay) delay = cfg.typingMinMs;
+  delay = Math.min(cfg.typingMaxMs, Math.max(cfg.typingMinMs, delay));
+
+  try {
+    await global.utils?.simulateTyping?.(api, threadID, delay);
+  } catch (err) {
+    global.log?.warn?.("TYPING", err?.message || String(err));
+    await sleep(delay);
+  }
 }
 
 async function drain(key) {
@@ -43,8 +64,8 @@ async function drain(key) {
   try {
     while (q.items.length) {
       const item = q.items.shift();
-      const { minIntervalMs } = limits();
-      const wait = Math.max(0, minIntervalMs - (Date.now() - q.lastSent));
+      const cfg = limits();
+      const wait = Math.max(0, cfg.minIntervalMs - (Date.now() - q.lastSent));
       if (wait) await sleep(wait);
 
       try {
@@ -63,35 +84,41 @@ async function drain(key) {
 }
 
 function wrapSendMessage(api) {
-  if (cfg().enable === false) return;
   if (!api || typeof api.sendMessage !== "function" || patched.has(api)) return;
   const original = api.sendMessage.bind(api);
 
-  api.sendMessage = function guardedSendMessage(message, threadID, callback) {
-    return enqueue(threadID, () => new Promise((resolve, reject) => {
-      let finished = false;
-      const done = (err, result) => {
-        if (finished) return;
-        finished = true;
-        try { if (typeof callback === "function") callback(err || null, result); } catch (_) {}
-        if (err) reject(err); else resolve(result);
-      };
+  const wrapped = function guardedSendMessage(message, threadID, callback) {
+    return enqueue(threadID, async () => {
+      await waitForHumanTyping(api, threadID, message);
+      return new Promise((resolve, reject) => {
+        let finished = false;
+        const done = (err, result) => {
+          if (finished) return;
+          finished = true;
+          try { if (typeof callback === "function") callback(err || null, result); } catch (_) {}
+          if (err) reject(err); else resolve(result);
+        };
 
-      try {
-        const ret = original(message, threadID, done);
-        if (ret && typeof ret.then === "function") ret.then(v => done(null, v), done);
-      } catch (err) {
-        done(err);
-      }
-    }));
+        try {
+          const ret = original(message, threadID, done);
+          if (ret && typeof ret.then === "function") ret.then(v => done(null, v), done);
+        } catch (err) {
+          done(err);
+        }
+      });
+    });
   };
 
-  patched.add(api);
+  api.sendMessage = wrapped;
+  patched.set(api, { original, wrapped });
   active = true;
 }
 
 function stop() {
-  for (const q of queues.values()) q.items.length = 0;
+  // Rejecting queued tasks ensures callers do not wait forever after reconnect.
+  for (const q of queues.values()) {
+    for (const item of q.items.splice(0)) item.reject(new Error("OUTGOING_STOPPED"));
+  }
   queues.clear();
   active = false;
 }
