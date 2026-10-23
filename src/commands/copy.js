@@ -130,8 +130,15 @@ async function startWatch(api, threadID) {
       const key = latest ? messageKey(latest) : null;
       const senderID = senderOf(latest);
 
-      // Fail closed if the API provides no reliable identity.
-      if (!latest || !key || !senderID) return;
+      // Log unsupported/empty history so monitoring failures are diagnosable.
+      if (!latest || !key || !senderID) {
+        const now = Date.now();
+        if (now - state.lastErrorLogAt > 30_000) {
+          state.lastErrorLogAt = now;
+          global.log?.warn?.("COPY", `لا يحتوي سجل المجموعة ${tid} على رسالة قابلة للتعرّف؛ تحقّق من صلاحية getThreadHistory`);
+        }
+        return;
+      }
 
       if (state.lastObservedKey === null) {
         // First successful read is only a baseline; it is not a new message.
