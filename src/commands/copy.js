@@ -152,23 +152,34 @@ async function startWatch(api, threadID) {
       state.lastObservedKey = key;
       if (senderID === botID || !botID) return;
 
-      // Re-check shortly before send: if another person has spoken meanwhile,
-      // defer to the most recent message instead of replying to stale content.
-      await sleep(REPLY_DELAY_MS);
-      if (state.stopped || !global._copyWatchers.has(tid)) return;
+      // Wait 10 seconds, then re-check. Follow newer human messages instead
+      // of consuming their keys without replying.
+      let pendingKey = key;
+      let pendingSender = senderID;
+      while (!state.stopped && global._copyWatchers.has(tid)) {
+        await sleep(REPLY_DELAY_MS);
+        if (state.stopped || !global._copyWatchers.has(tid)) return;
 
-      const freshMessages = await getRecentMessages(api, tid);
-      const freshLatest = newestMessage(freshMessages);
-      const freshKey = freshLatest ? messageKey(freshLatest) : null;
-      const freshSender = senderOf(freshLatest);
+        const freshMessages = await getRecentMessages(api, tid);
+        const freshLatest = newestMessage(freshMessages);
+        const freshKey = freshLatest ? messageKey(freshLatest) : null;
+        const freshSender = senderOf(freshLatest);
+        if (!freshKey || !freshSender) return;
+        if (freshSender === botID) {
+          state.lastObservedKey = freshKey;
+          return;
+        }
+        if (freshKey !== pendingKey || freshSender !== pendingSender) {
+          pendingKey = freshKey;
+          pendingSender = freshSender;
+          state.lastObservedKey = freshKey;
+          continue;
+        }
 
-      if (!freshKey || freshKey !== key || freshSender !== senderID || freshSender === botID) {
-        if (freshKey) state.lastObservedKey = freshKey;
+        await sendPlain(api, tid, TEXT);
+        global.log?.info?.("COPY", `تم إرسال الرد للمجموعة ${tid} بعد رسالة ${pendingKey}`);
         return;
       }
-
-      await sendPlain(api, tid, TEXT);
-      global.log?.info?.("COPY", `تم إرسال الرد للمجموعة ${tid} بعد رسالة ${key}`);
     } catch (err) {
       const now = Date.now();
       if (now - state.lastErrorLogAt > 30_000) {
