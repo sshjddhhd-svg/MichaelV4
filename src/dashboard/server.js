@@ -692,7 +692,7 @@ function startDashboard(port = 5000, healthPort = null) {
     if (!api) return res.json({ ok: false, error: "البوت غير متصل" });
     const { threadID, body, silent } = req.body;
     if (!threadID || !body) return res.json({ ok: false, error: "اختر محادثة واكتب الرسالة أولاً" });
-    if (!/^\\d+$/.test(String(threadID))) return res.json({ ok: false, error: "معرّف المحادثة غير صالح" });
+    if (!/^\d+$/.test(String(threadID))) return res.json({ ok: false, error: "معرّف المحادثة غير صالح" });
     if (String(body).length > 5000) return res.json({ ok: false, error: "الرسالة أطول من الحد المسموح (5000 حرف)" });
     const msg = { body: String(body) };
     if (silent) msg.noNotif = true;
