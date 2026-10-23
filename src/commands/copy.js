@@ -95,30 +95,6 @@ async function sendPlain(api, threadID, text) {
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
-async function sendReply(api, threadID) {
-  // Human typing is handled centrally by outgoingThrottle; this fixed delay
-  // additionally fulfills the requested 10-second wait before this reply.
-  await sleep(REPLY_DELAY_MS);
-  return sendPlain(api, threadID, TEXT);
-}
-
-function resolveLatestHumanMessage(messages, botID) {
-  const sorted = messages
-    .map((msg, index) => ({ msg, index, key: messageKey(msg), senderID: senderOf(msg) }))
-    .filter(x => x.key && x.senderID && x.senderID !== String(botID));
-
-  if (!sorted.length) return null;
-
-  const withTime = sorted.map(x => ({
-    ...x,
-    time: Number(x.msg.timestamp ?? x.msg.timestampMs ?? x.msg.createdAt ?? x.msg.created_at ?? 0)
-  }));
-  if (withTime.some(x => Number.isFinite(x.time) && x.time > 0)) {
-    withTime.sort((a, b) => b.time - a.time);
-    return withTime[0];
-  }
-  return sorted[sorted.length - 1];
-}
 
 async function startWatch(api, threadID) {
   const tid = String(threadID || "").trim();
