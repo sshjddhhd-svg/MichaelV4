@@ -96,12 +96,15 @@ function wrapSendMessage(api) {
       await waitForHumanTyping(api, threadID, message);
       return new Promise((resolve, reject) => {
         let finished = false;
+        let timeout = null;
         const done = (err, result) => {
           if (finished) return;
           finished = true;
+          if (timeout) clearTimeout(timeout);
           try { if (typeof callback === "function") callback(err || null, result); } catch (_) {}
           if (err) reject(err); else resolve(result);
         };
+        timeout = setTimeout(() => done(new Error("SEND_MESSAGE_TIMEOUT: no callback from API within 25000ms")), 25_000);
 
         try {
           const ret = original(message, threadID, done);
