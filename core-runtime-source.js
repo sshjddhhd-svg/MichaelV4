@@ -219,18 +219,19 @@ function startProtection(api) {
       log.warn("PROTECTION", `${name}: ${e.message || e}`);
     }
   }
+  // outgoingThrottle is the single send queue; humanTyping is consumed there
+  // to avoid double-wrapping api.sendMessage and stacking multiple delays.
   global.GoatBot.protection = {
     active,
     duplicateGuard: true,
     inboundRateLimit: true,
-    outboundThrottle: true,
-    humanTyping: typeof global.utils?.simulateTyping === "function",
+    outboundThrottle: require("./src/protection/outgoingThrottle").isActive(),
+    humanTyping: require("./src/protection/humanTyping").isActive(),
     connectionHealth: true,
     sessionMonitor: true,
   };
-  log.ok("PROTECTION", `🛡️ ${active} تشغيل + 2 حواجز مدمجة (dedup/rate-limit) ✔`);
+  log.ok("PROTECTION", `🛡️ ${active} طبقات حماية مفعّلة + مانع التكرار وتحديد المعدل ✔`);
 }
-
 function stopProtection() {
   const names = ["outgoingThrottle", "humanTyping", "keepAlive", "mqttHealthCheck", "sessionRefresher"];
   for (const name of names) {
