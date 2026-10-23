@@ -260,6 +260,41 @@ function startDashboard(port = 5000, healthPort = null) {
     } catch (e) { res.json({ ok: false, error: e.message }); }
   });
 
+  // ── Admin-only keyword auto-reply ────────────────────────────────────────────
+  app.get("/api/auto-reply", auth, (_, res) => {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+      const rule = cfg.adminKeywordReply || {};
+      res.json({ ok: true, rule: {
+        enabled: rule.enabled === true,
+        keyword: String(rule.keyword || ""),
+        response: String(rule.response || "")
+      }});
+    } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+
+  app.post("/api/auto-reply", auth, (req, res) => {
+    try {
+      const enabled = req.body?.enabled === true;
+      const keyword = String(req.body?.keyword || "").trim();
+      const response = String(req.body?.response || "").trim();
+      if (enabled && !keyword) return res.status(400).json({ ok: false, error: "أدخل الكلمة المفتاحية أولاً" });
+      if (keyword.length > 80) return res.status(400).json({ ok: false, error: "الكلمة المفتاحية طويلة جداً (الحد 80 حرفاً)" });
+      if (response.length > 2000) return res.status(400).json({ ok: false, error: "الرد طويل جداً (الحد 2000 حرف)" });
+      if (enabled && !response) return res.status(400).json({ ok: false, error: "أدخل نص الرد أولاً" });
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+      cfg.adminKeywordReply = { enabled, keyword, response };
+      global._selfWriteConfig = true;
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+      setTimeout(() => { global._selfWriteConfig = false; }, 3000);
+      if (global.GoatBot) global.GoatBot.config = cfg;
+      global.config = cfg;
+      global.commandPrefix = cfg.prefix || "/";
+      if (_io) _io.emit("config-reloaded", { ts: Date.now() });
+      res.json({ ok: true, rule: { enabled, keyword, response } });
+    } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+  });
+
   // ── Cookies ─────────────────────────────────────────────────────────────────
   app.post("/api/cookies", auth, (req, res) => {
     const raw = req.body?.cookies;
