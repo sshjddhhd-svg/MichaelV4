@@ -172,7 +172,7 @@ async function startWatch(api, threadID) {
         return;
       }
 
-      await sendReply(api, tid);
+      await sendPlain(api, tid, TEXT);
       global.log?.info?.("COPY", `تم إرسال الرد للمجموعة ${tid} بعد رسالة ${key}`);
     } catch (err) {
       const now = Date.now();
