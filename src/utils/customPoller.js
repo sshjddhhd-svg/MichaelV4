@@ -1,39 +1,66 @@
 /**
- * Djamel-Fca Architecte Core — Custom HTTP Poller (fallback for MQTT)
- * Copyright © 2025 DJAMEL
+ * Djamel-Fca Architecte — fallback poller.
+ *
+ * This poller intentionally does not impersonate the native message listener:
+ * getThreadList is only a health/keepalive check, not a message event source.
+ * If FCA's listen()/listenMqtt() has failed, this fallback cannot safely rebuild
+ * message events from a thread-list snapshot, so it reports that limitation.
  */
 "use strict";
-const axios = require("axios");
 
-let _active = false;
-let _timer  = null;
+let active = false;
+let timer = null;
+let running = false;
 
 function stopPoller() {
-  _active = false;
-  if (_timer) { clearTimeout(_timer); _timer = null; }
+  active = false;
+  if (timer) clearTimeout(timer);
+  timer = null;
 }
 
 function startPoller(api, handlerFn, intervalMs = 6000) {
-  if (_active) return;
-  _active = true;
-  global.log?.info?.("POLLER", `Custom HTTP Poller — interval ${intervalMs}ms`);
-
-  let lastSeen = "";
-  async function poll() {
-    if (!_active) return;
-    try {
-      // graphql thread list as keepalive + event source
-      const threads = await new Promise((res, rej) => {
-        api.getThreadList(3, null, ["INBOX"], (e, d) => e ? rej(e) : res(d));
-      });
-      const key = JSON.stringify((threads || []).map(t => t.threadID));
-      if (key !== lastSeen) { lastSeen = key; global.lastMqttActivity = Date.now(); }
-    } catch (e) {
-      global.log?.warn?.("POLLER", e.message);
-    }
-    _timer = setTimeout(poll, intervalMs);
+  if (active) return;
+  if (!api || typeof api.getThreadList !== "function") {
+    global.log?.error?.("POLLER", "لا تتوفر getThreadList؛ تعذر بدء فحص الاتصال البديل.");
+    return;
   }
-  poll().catch(() => {});
+
+  active = true;
+  const safeInterval = Math.max(1000, Number(intervalMs) || 6000);
+  global.log?.warn?.(
+    "POLLER",
+    `بدأ فحص احتياطي لقائمة المجموعات كل ${safeInterval}ms. هذا الفحص لا يستقبل محتوى الرسائل؛ مستمع FCA مطلوب لمراقبتها.`
+  );
+
+  async function poll() {
+    if (!active || running) return;
+    running = true;
+    try {
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        const done = (err, data) => {
+          if (settled) return;
+          settled = true;
+          if (err) reject(err);
+          else resolve(data);
+        };
+        try {
+          const ret = api.getThreadList(10, null, ["INBOX"], done);
+          if (ret && typeof ret.then === "function") ret.then(v => done(null, v), done);
+        } catch (err) {
+          done(err);
+        }
+      });
+      global.lastMqttActivity = Date.now();
+    } catch (err) {
+      global.log?.warn?.("POLLER", err?.message || String(err));
+    } finally {
+      running = false;
+      if (active) timer = setTimeout(poll, safeInterval);
+    }
+  }
+
+  poll().catch(err => global.log?.warn?.("POLLER", err?.message || String(err)));
 }
 
-module.exports = { startPoller, stopPoller };
+module.exports = { startPoller, stopPoller, isActive: () => active };
