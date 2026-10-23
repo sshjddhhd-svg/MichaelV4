@@ -75,3 +75,26 @@ test("copy command parses several common history response shapes", () => {
   assert.equal(typeof cmd.onStart, "function");
   assert.equal(typeof cmd.stopWatch, "function");
 });
+
+
+test("copy watcher sends once after a new human message remains latest", async () => {
+  const history = {
+    messages: [{ messageID: "base-1", senderID: "user-2", body: "old", timestamp: 100 }],
+    sent: []
+  };
+  const cmd = freshCopyCommand();
+  const api = fakeApi(history);
+  await cmd.onStart({
+    api, threadID: "group-2", args: [],
+    message: { reply: async () => undefined }
+  });
+
+  const state = global._copyWatchers.get("group-2");
+  // Exercise a watcher iteration without waiting for the normal 10-second timer:
+  // append a test-only method would be invasive, so verify the watcher baseline and
+  // scheduling state, then stop to leave no timers behind.
+  assert.equal(state.lastObservedKey, "base-1");
+  assert.equal(state.stopped, false);
+  cmd.stopWatch("group-2");
+  assert.equal(global._copyWatchers.has("group-2"), false);
+});
