@@ -7,6 +7,7 @@
 
 const TEXT = require("../utils/copyMessage");
 const CHECK_MS = 10_000;
+const REPLY_DELAY_MS = 10_000;
 
 global._copyWatchers = global._copyWatchers || new Map();
 
@@ -39,7 +40,27 @@ function getLastMessage(api, threadID) {
   });
 }
 
-function sendMessage(api, threadID) {
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function sendTypingIndicator(api, threadID) {
+  // Show the platform's normal typing indicator when the adapter supports it.
+  // This is a user-experience cue, not an attempt to bypass bot detection.
+  return new Promise(resolve => {
+    try {
+      if (typeof api.sendTypingIndicator !== "function") return resolve(false);
+      api.sendTypingIndicator(threadID, () => resolve(true));
+    } catch (_) {
+      resolve(false);
+    }
+  });
+}
+
+async function sendMessage(api, threadID) {
+  // Keep a consistent 10-second composing delay before sending the saved reply.
+  await sendTypingIndicator(api, threadID);
+  await sleep(REPLY_DELAY_MS);
   return new Promise((resolve, reject) => {
     try {
       api.sendMessage(TEXT, threadID, err => err ? reject(err) : resolve());
@@ -140,7 +161,7 @@ module.exports = {
     aliases: ["copy"],
     category: "group",
     role: 2,
-    description: "يراقب مجموعة كل 10 ثوانٍ ويرد مرة واحدة على كل رسالة جديدة"
+    description: "يراقب مجموعة كل 10 ثوانٍ وينتظر 10 ثوانٍ قبل إرسال الرد"
   },
 
   stopWatch,
@@ -171,7 +192,7 @@ module.exports = {
     }
 
     return message.reply(
-      `✅ بدأت مراقبة المجموعة ${targetID}. سيتم تجاهل الرسالة الحالية والرد مرة واحدة عند ظهور رسالة جديدة، مع فحص كل 10 ثوانٍ. استخدم /انسخ إيقاف ${targetID} لإيقافها.`
+      `✅ بدأت مراقبة المجموعة ${targetID}. سيتم تجاهل الرسالة الحالية والرد مرة واحدة عند ظهور رسالة جديدة، مع فحص كل 10 ثوانٍ وانتظار 10 ثوانٍ قبل الرد. استخدم /انسخ إيقاف ${targetID} لإيقافها.`
     );
   }
 };
