@@ -42,10 +42,11 @@ const ROOT         = __dirname;
 const CONFIG_PATH  = path.join(ROOT, "config.json");
 const ACCOUNT_PATH = path.join(ROOT, "account.txt");
 const CMDS_DIR     = path.join(ROOT, "src/commands");
-const PORT           = parseInt(process.env.PORT || "5000", 10);
+const PORT           = parseInt(process.env.PORT || "8080", 10);
 // Compatibility contract: bot/health port 5000, dashboard port 8080.
 // Railway can route a generated domain to 8080 using its Target Port setting.
-const DASHBOARD_PORT = parseInt(process.env.DASHBOARD_PORT || "8080", 10);
+// Railway routes its public domain to PORT, so the dashboard listens there by default.
+const DASHBOARD_PORT = parseInt(process.env.DASHBOARD_PORT || process.env.PORT || "8080", 10);
 const HEALTH_PORT    = PORT !== DASHBOARD_PORT ? PORT : null;
 
 // ─── Load Config ───────────────────────────────────────────────────────────────

@@ -73,14 +73,20 @@ function validToken(tok) {
   if (Date.now() > exp) { _tokens.delete(tok); return false; }
   return true;
 }
+const DEFAULT_DASH_PWD = "Muzankon2006";
+function pwdMatches(input, expected) {
+  const a = crypto.createHash("sha256").update(String(input || ""), "utf8").digest();
+  const b = crypto.createHash("sha256").update(String(expected || ""), "utf8").digest();
+  return crypto.timingSafeEqual(a, b);
+}
 function getDashPwd() {
   const envPwd = String(process.env.DASHBOARD_PASSWORD || "").trim();
   if (envPwd) return envPwd;
   try {
     const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
     const pwd = String(cfg.dashboard?.password || "").trim();
-    return pwd;
-  } catch (_) { return ""; }
+    return pwd && pwd !== "CHANGE_ME" ? pwd : DEFAULT_DASH_PWD;
+  } catch (_) { return DEFAULT_DASH_PWD; }
 }
 
 // Safe editor writes: keep a rollback copy and replace atomically.
@@ -209,7 +215,7 @@ function startDashboard(port = 5000, healthPort = null) {
   app.post("/api/login", (req, res) => {
     const { password } = req.body;
     const expected = getDashPwd();
-    if (expected && expected !== "CHANGE_ME" && password === expected) {
+    if (expected && pwdMatches(password, expected)) {
       const tok = genToken();
       res.json({ ok: true, token: tok });
     } else {
@@ -1374,6 +1380,71 @@ ${code}`;
   });
 
   // ── Catch-all SPA ─────────────────────────────────────────────────────────────
+  // ── Michael V4: live thread list from the bot account ───────────────────────
+  app.get("/api/bot/threads", auth, async (_, res) => {
+    const api = global.GoatBot?.fcaApi;
+    const map = new Map();
+    const add = (t) => { if (t.tid && !map.has(t.tid)) map.set(t.tid, t); };
+    if (api && typeof api.getThreadList === "function") {
+      try {
+        const list = await Promise.race([
+          new Promise((ok, no) => api.getThreadList(60, null, ["INBOX"], (e, d) => e ? no(e) : ok(d || []))),
+          new Promise((_, no) => setTimeout(() => no(new Error("timeout")), 15000)),
+        ]);
+        for (const t of list) {
+          const tid = String(t.threadID || "");
+          let name = t.name || t.threadName || "";
+          if (!name && !t.isGroup && Array.isArray(t.userInfo)) {
+            const other = t.userInfo.find(u => String(u.id) !== String(global.GoatBot?.botID));
+            name = other?.name || "";
+          }
+          add({ tid, name: name || (t.isGroup ? "مجموعة" : "محادثة") + " " + tid.slice(-4),
+            isGroup: !!t.isGroup, members: (t.participantIDs || []).length,
+            image: t.imageSrc || null, lastTs: Number(t.timestamp || 0), snippet: t.snippet || "" });
+        }
+      } catch (e) { global.log?.warn?.("DASH", "getThreadList: " + (e.message || e)); }
+    }
+    for (const [tid, d] of Object.entries(global.GoatBot?.allThreadData || {})) {
+      add({ tid: String(tid), name: d?.threadName || d?.name || "مجموعة " + String(tid).slice(-4),
+        isGroup: !!d?.isGroup, members: d?.participantIDs?.length || 0, image: null,
+        lastTs: _threadLastMsg.get(String(tid))?.ts || 0, snippet: _threadLastMsg.get(String(tid))?.body || "" });
+    }
+    const threads = [...map.values()].sort((a, b) => b.lastTs - a.lastTs);
+    res.json({ ok: true, online: !!api, threads });
+  });
+
+  // ── Michael V4: run a command inside a chosen thread ────────────────────────
+  app.post("/api/bot/run", auth, async (req, res) => {
+    const api = global.GoatBot?.fcaApi;
+    if (!api) return res.json({ ok: false, error: "البوت غير متصل — أضف الكوكيز أولاً" });
+    const threadID = String(req.body?.threadID || "").trim();
+    const name = String(req.body?.command || "").trim().replace(/^\//, "").toLowerCase();
+    const argsText = String(req.body?.args || "").trim();
+    if (!/^\d+$/.test(threadID)) return res.json({ ok: false, error: "اختر محادثة صحيحة" });
+    const cmd = global.GoatBot?.commands?.get(name);
+    if (!cmd) return res.json({ ok: false, error: "الأمر غير موجود" });
+    const prefix = global.GoatBot?.config?.prefix || "/";
+    const botID = String(global.GoatBot?.botID || api.getCurrentUserID?.() || "");
+    const body = `${prefix}${name}${argsText ? " " + argsText : ""}`;
+    const event = { type: "message", threadID, senderID: botID, messageID: "dash_" + Date.now(),
+      body, args: argsText ? argsText.split(/\s+/) : [], isGroup: true, attachments: [], mentions: {}, fromDashboard: true };
+    const send = (msg, cb) => new Promise(ok => api.sendMessage(msg, threadID, (e, info) => { if (typeof cb === "function") cb(e, info); ok(info); }));
+    const message = {
+      reply: (m, cb) => send(m, cb),
+      send: (m, cb) => send(m, cb),
+      react: (emoji, mid) => new Promise(ok => { try { api.setMessageReaction(emoji, mid, () => ok(), true); } catch (_) { ok(); } }),
+      unsend: (mid) => new Promise(ok => { try { api.unsendMessage(mid, () => ok()); } catch (_) { ok(); } }),
+    };
+    const ctx = { api, event, args: event.args, commandName: name, message, prefix, role: 3, senderID: botID, threadID };
+    try {
+      if (typeof cmd.onStart === "function") await cmd.onStart(ctx);
+      else if (typeof cmd.run === "function") await cmd.run(ctx);
+      else return res.json({ ok: false, error: "الأمر لا يحتوي على onStart" });
+      stats.totalCommands++;
+      res.json({ ok: true, ran: body });
+    } catch (e) { res.json({ ok: false, error: e.message || String(e) }); }
+  });
+
   app.get("*", (_, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
   setInterval(() => { if (_io) _io.emit("stats-update", getStats()); }, 5000);

@@ -1,3 +1,108 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Djamel-Fca Architecte Core</title><link rel="stylesheet" href="/assets/css/core.css"></head>
-<body><main><section class="card"><h1>Djamel-Fca Architecte</h1><p class="muted">Neutral dashboard foundation — ready for your bot's own UI.</p><p>Status: <strong data-status>Checking…</strong></p><div class="actions"><a href="/health"><button>Health</button></a><a href="/ping"><button>Ping</button></a></div><p class="muted">Core By Djamel · Djamel-fca</p></section></main><script src="/assets/js/core.js"></script></body></html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#0b0d12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Michael V4</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/assets/css/core.css">
+</head>
+<body>
+
+<!-- Login -->
+<section id="login" class="screen login">
+  <div class="login-glow"></div>
+  <div class="login-box">
+    <div class="logo">M</div>
+    <h1 class="brand">Michael <span>V4</span></h1>
+    <p class="muted">لوحة تحكم البوت</p>
+    <form id="loginForm" autocomplete="on">
+      <input id="pwd" type="password" inputmode="text" placeholder="كلمة المرور" autocomplete="current-password" required>
+      <button class="btn primary" type="submit">دخول</button>
+      <p id="loginErr" class="err" hidden></p>
+    </form>
+  </div>
+</section>
+
+<!-- App -->
+<section id="app" class="screen" hidden>
+  <header class="topbar">
+    <div>
+      <h1 class="brand sm">Michael <span>V4</span></h1>
+      <div class="status"><i id="dot" class="dot"></i><span id="statusText">جارٍ الفحص…</span></div>
+    </div>
+    <button id="logoutBtn" class="icon-btn" aria-label="خروج">⎋</button>
+  </header>
+
+  <main class="content">
+    <!-- Chats tab -->
+    <div id="tab-chats" class="tab active">
+      <div class="search-row">
+        <input id="search" type="search" placeholder="ابحث عن محادثة…">
+        <button id="refreshBtn" class="icon-btn" aria-label="تحديث">↻</button>
+      </div>
+      <div class="filters">
+        <button class="chip active" data-filter="all">الكل</button>
+        <button class="chip" data-filter="group">مجموعات</button>
+        <button class="chip" data-filter="dm">خاص</button>
+      </div>
+      <ul id="threads" class="threads"></ul>
+      <p id="threadsEmpty" class="empty" hidden></p>
+    </div>
+
+    <!-- Cookies tab -->
+    <div id="tab-cookies" class="tab">
+      <div class="card">
+        <h2>الكوكيز</h2>
+        <p class="muted">الصق كوكيز حساب البوت (AppState JSON أو نص الكوكيز). سيُعاد تشغيل البوت تلقائياً.</p>
+        <textarea id="cookies" rows="9" dir="ltr" placeholder='[{"key":"c_user","value":"..."}, ...]'></textarea>
+        <div class="row">
+          <button id="pasteBtn" class="btn ghost" type="button">لصق</button>
+          <button id="saveCookies" class="btn primary" type="button">حفظ وتشغيل</button>
+        </div>
+        <p id="cookieMsg" class="note" hidden></p>
+      </div>
+      <div class="card">
+        <h2>التحكم</h2>
+        <div class="row">
+          <button id="restartBtn" class="btn ghost" type="button">إعادة تشغيل البوت</button>
+        </div>
+        <p class="muted small">بادئة الأوامر: <b class="mono">/</b></p>
+      </div>
+    </div>
+  </main>
+
+  <nav class="tabbar">
+    <button class="tabbtn active" data-tab="chats"><span>💬</span>المحادثات</button>
+    <button class="tabbtn" data-tab="cookies"><span>🍪</span>الكوكيز</button>
+  </nav>
+</section>
+
+<!-- Command sheet -->
+<div id="sheetBg" class="sheet-bg" hidden></div>
+<div id="sheet" class="sheet" aria-hidden="true">
+  <div class="grip"></div>
+  <div class="sheet-head">
+    <div class="avatar" id="sheetAvatar"></div>
+    <div class="grow">
+      <h3 id="sheetTitle"></h3>
+      <p id="sheetSub" class="muted small"></p>
+    </div>
+    <button id="sheetClose" class="icon-btn" aria-label="إغلاق">✕</button>
+  </div>
+  <p class="label">اختر الأمر</p>
+  <div id="cmdList" class="cmds"></div>
+  <p class="label">إضافات (اختياري)</p>
+  <input id="cmdArgs" type="text" placeholder="نص بعد الأمر">
+  <div class="preview mono" dir="rtl" id="cmdPreview">/</div>
+  <button id="runBtn" class="btn primary block" disabled>تفعيل الأمر</button>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/assets/js/core.js"></script>
+</body>
+</html>

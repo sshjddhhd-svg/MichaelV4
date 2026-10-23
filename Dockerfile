@@ -14,9 +14,7 @@ COPY scripts/fix-esm.js ./scripts/fix-esm.js
 RUN npm install --legacy-peer-deps --omit=dev --no-audit --no-fund
 COPY . .
 
-ENV PORT=5000 \
-    DASHBOARD_PORT=8080 \
-    RAILWAY_DOMAIN_TARGET_PORT=8080
-EXPOSE 5000 8080
+ENV PORT=8080
+EXPOSE 8080
 CMD ["node", "index.js"]
 
